@@ -1,9 +1,10 @@
 import cv2
 from ultralytics import YOLO
 import time
-from config import THRESHOLD, CAMERA_SOURCE
+from config import THRESHOLD, CAMERA_SOURCE, DISCORD_WEBHOOK_URL
 import os
 from datetime import datetime
+import requests
 
 def setup_video_capture():
     cap = cv2.VideoCapture(CAMERA_SOURCE)
@@ -21,9 +22,34 @@ def detect_cat(frame, model):
                 return True, box.xyxy[0].tolist()
     return False, None
 
+class DiscordNotifier:
+    def __init__(self, webhook_url):
+        self.webhook_url = webhook_url
+
+    def send_alert(self, message, video_path=None):
+        payload = {"content": message}
+        files = {}
+        
+        if video_path:
+            # Discord has an 8MB file limit for free accounts
+            # Check file size and compress if needed
+            if os.path.getsize(video_path) < 8 * 1024 * 1024:  # 8MB in bytes
+                files = {
+                    "file": ("cat_video.mp4", open(video_path, "rb"), "video/mp4")
+                }
+            else:
+                payload["content"] += "\n(Video too large to attach)"
+
+        requests.post(
+            self.webhook_url,
+            data=payload,
+            files=files
+        )
+
 def main():
     model = YOLO('yolov8n.pt')
     cap = setup_video_capture()
+    notifier = DiscordNotifier(DISCORD_WEBHOOK_URL)
     cat_present = False
     start_time = None
     last_detection_time = None
@@ -59,6 +85,7 @@ def main():
                 print(f"Cat left after {duration:.1f} seconds")
                 
                 # Save the video clip
+                output_file = None
                 if output_frames:
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                     output_path = f"cat_clips"
@@ -76,7 +103,9 @@ def main():
                     print(f"Saved video clip to {output_file}")
                 
                 if duration > THRESHOLD:
-                    print(f"⚠️ Alert: Cat spent {duration:.1f} seconds in litter box!")
+                    alert_message = f"⚠️ Alert: Cat spent {duration:.1f} seconds in litter box!"
+                    print(alert_message)
+                    notifier.send_alert(alert_message, output_file)
                 cat_present = False
                 output_frames = []
                 
