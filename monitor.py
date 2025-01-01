@@ -1,16 +1,11 @@
 import cv2
 from ultralytics import YOLO
 import time
-from config import THRESHOLD, CAMERA_SOURCE, DISCORD_WEBHOOK_URL
+from config import THRESHOLD, CAMERA_SOURCE1, CAMERA_SOURCE2, CAMERA_SOURCE3, DISCORD_WEBHOOK_URL
 import os
 from datetime import datetime
 import requests
-
-def setup_video_capture():
-    cap = cv2.VideoCapture(CAMERA_SOURCE)
-    if not cap.isOpened():
-        raise RuntimeError(f"Failed to open video source: {CAMERA_SOURCE}")
-    return cap
+from typing import Dict, List, Tuple
 
 def detect_cat(frame, model):
     results = model(frame, verbose=False)
@@ -46,74 +41,131 @@ class DiscordNotifier:
             files=files
         )
 
-def main():
-    model = YOLO('yolov8n.pt')
-    cap = setup_video_capture()
-    notifier = DiscordNotifier(DISCORD_WEBHOOK_URL)
-    cat_present = False
-    start_time = None
-    last_detection_time = None
-    DEBOUNCE_THRESHOLD = 2.0
-    
-    # Add video writer variables
-    output_writer = None
-    output_frames = []
-    
-    try:
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-                
-            cat_detected, bbox = detect_cat(frame, model)
-            current_time = time.time()
+class CameraMonitor:
+    def __init__(self, camera_sources: Dict[str, str], webhook_url: str):
+        self.camera_sources = camera_sources
+        self.captures = {}
+        self.cat_states = {}  # Track cat presence for each camera
+        self.start_times = {}
+        self.last_detection_times = {}
+        self.output_frames = {}
+        self.notifier = DiscordNotifier(webhook_url)
+        self.model = YOLO('yolov8n.pt')
+        self.DEBOUNCE_THRESHOLD = 2.0
+        
+        # Initialize all cameras
+        for camera_id, source in camera_sources.items():
+            cap = cv2.VideoCapture(source)
+            if not cap.isOpened():
+                raise RuntimeError(f"Failed to open camera {camera_id}: {source}")
+            self.captures[camera_id] = cap
+            self.cat_states[camera_id] = False
+            self.start_times[camera_id] = None
+            self.last_detection_times[camera_id] = None
+            self.output_frames[camera_id] = []
+        
+        # Add error counters for each camera
+        self.error_counts = {camera_id: 0 for camera_id in camera_sources}
+        self.MAX_ERRORS = 10  # Maximum number of consecutive errors before reconnecting
+        
+    def _reconnect_camera(self, camera_id: str) -> None:
+        """Attempt to reconnect to a camera after errors"""
+        print(f"Attempting to reconnect to camera {camera_id}...")
+        if self.captures[camera_id].isOpened():
+            self.captures[camera_id].release()
+        
+        self.captures[camera_id] = cv2.VideoCapture(self.camera_sources[camera_id])
+        self.error_counts[camera_id] = 0
+        
+        # Set camera properties that might help with stability
+        self.captures[camera_id].set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimize buffer
+        
+    def process_frame(self, camera_id: str, frame) -> None:
+        cat_detected, bbox = detect_cat(frame, self.model)
+        current_time = time.time()
+        
+        if cat_detected:
+            self.last_detection_times[camera_id] = current_time
+            if not self.cat_states[camera_id]:
+                self.start_times[camera_id] = current_time
+                self.cat_states[camera_id] = True
+                print(f"Cat entered litter box on camera {camera_id}")
+                self.output_frames[camera_id] = []
             
-            if cat_detected:
-                last_detection_time = current_time
-                if not cat_present:
-                    start_time = current_time
-                    cat_present = True
-                    print("Cat entered litter box")
-                    # Start collecting frames
-                    output_frames = []
-                
-                # Store frame while cat is present
-                output_frames.append(frame.copy())
-                
-            elif cat_present and (current_time - last_detection_time) > DEBOUNCE_THRESHOLD:
-                duration = current_time - start_time
-                print(f"Cat left after {duration:.1f} seconds")
-                
-                # Save the video clip
-                output_file = None
-                if output_frames:
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    output_path = f"cat_clips"
-                    os.makedirs(output_path, exist_ok=True)
+            self.output_frames[camera_id].append(frame.copy())
+            
+        elif (self.cat_states[camera_id] and 
+              (current_time - self.last_detection_times[camera_id]) > self.DEBOUNCE_THRESHOLD):
+            self._handle_cat_exit(camera_id, current_time)
+
+    def _handle_cat_exit(self, camera_id: str, current_time: float) -> None:
+        duration = current_time - self.start_times[camera_id]
+        print(f"Cat left after {duration:.1f} seconds on camera {camera_id}")
+        
+        output_file = None
+        if self.output_frames[camera_id]:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_path = f"cat_clips/{camera_id}"
+            os.makedirs(output_path, exist_ok=True)
+            
+            frames = self.output_frames[camera_id]
+            height, width = frames[0].shape[:2]
+            output_file = os.path.join(output_path, f"cat_visit_{timestamp}.mp4")
+            writer = cv2.VideoWriter(output_file, 
+                                  cv2.VideoWriter_fourcc(*'mp4v'),
+                                  30, (width, height))
+            
+            for frame in frames:
+                writer.write(frame)
+            writer.release()
+            print(f"Saved video clip to {output_file}")
+        
+        if duration > THRESHOLD:
+            alert_message = f"⚠️ Alert: Cat spent {duration:.1f} seconds in litter box on camera {camera_id}!"
+            print(alert_message)
+            self.notifier.send_alert(alert_message, output_file)
+        
+        self.cat_states[camera_id] = False
+        self.output_frames[camera_id] = []
+
+    def run(self):
+        print("Starting monitoring...")
+        try:
+            while True:
+                for camera_id, cap in self.captures.items():
+                    ret, frame = cap.read()
+                    if not ret:
+                        self.error_counts[camera_id] += 1
+                        print(f"Error reading from camera {camera_id} ({self.error_counts[camera_id]}/{self.MAX_ERRORS})")
+                        
+                        if self.error_counts[camera_id] >= self.MAX_ERRORS:
+                            self._reconnect_camera(camera_id)
+                        continue
                     
-                    height, width = output_frames[0].shape[:2]
-                    output_file = os.path.join(output_path, f"cat_visit_{timestamp}.mp4")
-                    writer = cv2.VideoWriter(output_file, 
-                                          cv2.VideoWriter_fourcc(*'mp4v'),
-                                          30, (width, height))
+                    # Reset error count on successful frame read
+                    self.error_counts[camera_id] = 0
+                    self.process_frame(camera_id, frame)
                     
-                    for frame in output_frames:
-                        writer.write(frame)
-                    writer.release()
-                    print(f"Saved video clip to {output_file}")
-                
-                if duration > THRESHOLD:
-                    alert_message = f"⚠️ Alert: Cat spent {duration:.1f} seconds in litter box!"
-                    print(alert_message)
-                    notifier.send_alert(alert_message, output_file)
-                cat_present = False
-                output_frames = []
-                
-    except KeyboardInterrupt:
-        print("\nStopping monitoring...")
-    finally:
-        cap.release()
-        cv2.destroyAllWindows()
+                # Add a small delay to prevent CPU overload
+                time.sleep(0.01)
+                    
+        except KeyboardInterrupt:
+            print("\nStopping monitoring...")
+        finally:
+            for cap in self.captures.values():
+                cap.release()
+            cv2.destroyAllWindows()
+
+def main():
+    # Example camera sources
+    camera_sources = {
+        "box1": CAMERA_SOURCE1,
+        "box2": CAMERA_SOURCE2,
+        "box3": CAMERA_SOURCE3
+    }
+    
+    monitor = CameraMonitor(camera_sources, DISCORD_WEBHOOK_URL)
+    monitor.run()
 
 if __name__ == "__main__":
     main()
