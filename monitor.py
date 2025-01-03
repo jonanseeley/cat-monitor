@@ -52,6 +52,8 @@ class CameraMonitor:
         self.notifier = DiscordNotifier(webhook_url)
         self.model = YOLO('yolov8n.pt')
         self.DEBOUNCE_THRESHOLD = 2.0
+        self.DETECTION_INTERVAL = 1.0  # seconds between detection checks
+        self.last_check_times = {camera_id: 0 for camera_id in camera_sources}
         
         # Initialize all cameras
         for camera_id, source in camera_sources.items():
@@ -81,22 +83,28 @@ class CameraMonitor:
         self.captures[camera_id].set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimize buffer
         
     def process_frame(self, camera_id: str, frame) -> None:
-        cat_detected, bbox = detect_cat(frame, self.model)
         current_time = time.time()
         
-        if cat_detected:
-            self.last_detection_times[camera_id] = current_time
-            if not self.cat_states[camera_id]:
-                self.start_times[camera_id] = current_time
-                self.cat_states[camera_id] = True
-                print(f"Cat entered litter box on camera {camera_id}")
-                self.output_frames[camera_id] = []
-            
+        # Always append frame if we're currently tracking a cat
+        if self.cat_states[camera_id]:
             self.output_frames[camera_id].append(frame.copy())
+        
+        # Only run detection if enough time has passed since last check
+        if current_time - self.last_check_times[camera_id] >= self.DETECTION_INTERVAL:
+            self.last_check_times[camera_id] = current_time
+            cat_detected, bbox = detect_cat(frame, self.model)
             
-        elif (self.cat_states[camera_id] and 
-              (current_time - self.last_detection_times[camera_id]) > self.DEBOUNCE_THRESHOLD):
-            self._handle_cat_exit(camera_id, current_time)
+            if cat_detected:
+                self.last_detection_times[camera_id] = current_time
+                if not self.cat_states[camera_id]:
+                    self.start_times[camera_id] = current_time
+                    self.cat_states[camera_id] = True
+                    print(f"Cat entered litter box on camera {camera_id}")
+                    self.output_frames[camera_id] = [frame.copy()]  # Start with current frame
+            
+            elif (self.cat_states[camera_id] and 
+                  (current_time - self.last_detection_times[camera_id]) > self.DEBOUNCE_THRESHOLD):
+                self._handle_cat_exit(camera_id, current_time)
 
     def _handle_cat_exit(self, camera_id: str, current_time: float) -> None:
         duration = current_time - self.start_times[camera_id]
@@ -145,10 +153,7 @@ class CameraMonitor:
                     # Reset error count on successful frame read
                     self.error_counts[camera_id] = 0
                     self.process_frame(camera_id, frame)
-                    
-                # Add a small delay to prevent CPU overload
-                time.sleep(0.01)
-                    
+                
         except KeyboardInterrupt:
             print("\nStopping monitoring...")
         finally:
