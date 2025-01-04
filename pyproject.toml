@@ -4,9 +4,6 @@ version = "0.1.0"
 description = "Monitor cat litter box usage using computer vision"
 requires-python = ">=3.8"
 
-[tool.uv]
-requirements-txt = "requirements.txt"
-
 [tool.ruff]
 line-length = 88
 target-version = "py38"
