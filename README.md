@@ -26,24 +26,16 @@ A Python application that monitors multiple litter boxes using IP cameras and se
    cd cat-litter-monitor
    ```
 
-2. Install dependencies using uv:
-   ```bash
-   # Create and activate virtual environment (recommended)
-   uv venv --python 3.11
-   source .venv/bin/activate
-   
-   # Install required packages
-   uv pip install -r requirements.txt
-   ```
 
-3. Configure the application:
+2. Configure the application:
    - Create a `.env` file with the following variables:
      - `DISCORD_WEBHOOK_URL`
      - `CAMERA_SOURCE[1-n]` (should include authentication in the RTSP URL if needed)
      - etc.
 
-4. Run the application:
+4. Build the Docker image and run a container
    ```bash
-   uv run monitor.py
+   docker build -t cat-monitor .
+   docker run --env-file .env cat-monitor
    ```
 
