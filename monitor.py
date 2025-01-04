@@ -128,7 +128,7 @@ class CameraMonitor:
             writer = cv2.VideoWriter(
                 output_file,
                 cv2.VideoWriter_fourcc(*'avc1'),  # H.264 codec
-                30, (width, height)
+                15, (width, height)
             )
             
             # Write frames in chunks
