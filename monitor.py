@@ -25,16 +25,13 @@ class DiscordNotifier:
         payload = {"content": message}
         files = {}
         
-        if video_path:
-            # Discord has an 8MB file limit for free accounts
-            # Check file size and compress if needed
-            if os.path.getsize(video_path) < 8 * 1024 * 1024:  # 8MB in bytes
+        if video_path and os.path.getsize(video_path) < 8 * 1024 * 1024:
+            # Use context manager for proper file handling
+            with open(video_path, "rb") as video_file:
                 files = {
-                    "file": ("cat_video.mp4", open(video_path, "rb"), "video/mp4")
+                    "file": ("cat_video.mp4", video_file, "video/mp4")
                 }
-            else:
-                payload["content"] += "\n(Video too large to attach)"
-
+            
         requests.post(
             self.webhook_url,
             data=payload,
@@ -54,6 +51,8 @@ class CameraMonitor:
         self.DEBOUNCE_THRESHOLD = 4.0
         self.DETECTION_INTERVAL = 1.0  # seconds between detection checks
         self.last_check_times = {camera_id: 0 for camera_id in camera_sources}
+        self.frame_skip = 150  # Process every nth frame
+        self.frame_count = {camera_id: 0 for camera_id in camera_sources}
         
         # Initialize all cameras
         for camera_id, source in camera_sources.items():
@@ -83,8 +82,13 @@ class CameraMonitor:
         self.captures[camera_id].set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimize buffer
         
     def process_frame(self, camera_id: str, frame) -> None:
+        self.frame_count[camera_id] += 1
         current_time = time.time()
         
+        # Skip frames for performance unless we're tracking a cat
+        if not self.cat_states[camera_id] and self.frame_count[camera_id] % self.frame_skip != 0:
+            return
+            
         # Always append frame if we're currently tracking a cat
         if self.cat_states[camera_id]:
             self.output_frames[camera_id].append(frame.copy())
@@ -119,12 +123,19 @@ class CameraMonitor:
             frames = self.output_frames[camera_id]
             height, width = frames[0].shape[:2]
             output_file = os.path.join(output_path, f"cat_visit_{timestamp}.mp4")
-            writer = cv2.VideoWriter(output_file, 
-                                  cv2.VideoWriter_fourcc(*'mp4v'),
-                                  30, (width, height))
             
-            for frame in frames:
-                writer.write(frame)
+            # Use more efficient codec and preset
+            writer = cv2.VideoWriter(
+                output_file,
+                cv2.VideoWriter_fourcc(*'avc1'),  # H.264 codec
+                30, (width, height)
+            )
+            
+            # Write frames in chunks
+            for i in range(0, len(frames), 10):
+                chunk = frames[i:i+10]
+                for frame in chunk:
+                    writer.write(frame)
             writer.release()
             print(f"Saved video clip to {output_file}")
         
