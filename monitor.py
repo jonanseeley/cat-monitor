@@ -51,7 +51,7 @@ class CameraMonitor:
         self.output_frames = {}
         self.notifier = DiscordNotifier(webhook_url)
         self.model = YOLO('yolov8n.pt')
-        self.DEBOUNCE_THRESHOLD = 2.0
+        self.DEBOUNCE_THRESHOLD = 4.0
         self.DETECTION_INTERVAL = 1.0  # seconds between detection checks
         self.last_check_times = {camera_id: 0 for camera_id in camera_sources}
         
