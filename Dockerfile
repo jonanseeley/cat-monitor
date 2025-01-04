@@ -1,8 +1,14 @@
-# Use Python 3.11 slim image as base
-FROM python:3.11-slim
+# Use NVIDIA CUDA base image
+FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 
-# Install system dependencies for OpenCV
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
+    python3.10 \
+    python3-pip \
     libgl1-mesa-glx \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
@@ -10,12 +16,17 @@ RUN apt-get update && apt-get install -y \
 # Set working directory
 WORKDIR /app
 
-# Copy requirements and install dependencies
+# Copy requirements first to leverage Docker cache
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy all files from current directory
+# Install Python dependencies
+RUN pip3 install --no-cache-dir -r requirements.txt
+
+# Copy the rest of the application
 COPY . .
 
+# Create directory for video clips
+RUN mkdir -p cat_clips
+
 # Run the application
-CMD ["python", "monitor.py"]
+CMD ["python3", "monitor.py"]
