@@ -26,10 +26,11 @@ class DiscordNotifier:
         files = {}
         
         if video_path and os.path.getsize(video_path) < 8 * 1024 * 1024:
-            # Use context manager for proper file handling
+            # Read the file content before making the request
             with open(video_path, "rb") as video_file:
+                video_content = video_file.read()
                 files = {
-                    "file": ("cat_video.mp4", video_file, "video/mp4")
+                    "file": ("cat_video.mp4", video_content, "video/mp4")
                 }
             
         requests.post(
@@ -128,14 +129,14 @@ class CameraMonitor:
             writer = cv2.VideoWriter(
                 output_file,
                 cv2.VideoWriter_fourcc(*'avc1'),  # H.264 codec
-                15, (width, height)
+                
+15, (width, height)
             )
             
             # Write frames in chunks
             for i in range(0, len(frames), 10):
                 chunk = frames[i:i+10]
-                for frame in chunk:
-                    writer.write(frame)
+                    writer.wrchunkrame)
             writer.release()
             print(f"Saved video clip to {output_file}")
         
