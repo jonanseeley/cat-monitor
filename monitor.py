@@ -136,7 +136,8 @@ class CameraMonitor:
             # Write frames in chunks
             for i in range(0, len(frames), 10):
                 chunk = frames[i:i+10]
-                writer.write(chunk)
+                for frame in chunk:  # Add this loop to write individual frames
+                    writer.write(frame)
             writer.release()
             print(f"Saved video clip to {output_file}")
         
